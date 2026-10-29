@@ -2,6 +2,7 @@ package com.gatekeeper.filter;
 
 import com.gatekeeper.model.ApiKey;
 import com.gatekeeper.service.ApiKeyService;
+import com.gatekeeper.service.RateLimitDecision;
 import com.gatekeeper.service.RateLimiterService;
 import com.gatekeeper.service.RequestLogService;
 import jakarta.servlet.FilterChain;
@@ -61,20 +62,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
-        boolean allowed = rateLimiterService.isAllowed(apiKeyHeader, apiKey.getRateLimit());
+        RateLimitDecision decision = rateLimiterService.tryConsume(apiKeyHeader, apiKey.getRateLimit());
 
-        response.setHeader("X-RateLimit-Limit", String.valueOf(apiKey.getRateLimit()));
-        response.setHeader("X-RateLimit-Remaining",
-                String.valueOf(rateLimiterService.getRemainingRequests(apiKeyHeader, apiKey.getRateLimit())));
-        response.setHeader("X-RateLimit-Reset",
-                String.valueOf(rateLimiterService.getResetTimeSeconds(apiKeyHeader)));
+        response.setHeader("X-RateLimit-Limit", String.valueOf(decision.limit()));
+        response.setHeader("X-RateLimit-Remaining", String.valueOf(decision.remaining()));
+        response.setHeader("X-RateLimit-Reset", String.valueOf(decision.resetSeconds()));
 
-        if (!allowed) {
+        if (!decision.allowed()) {
             long elapsed = System.currentTimeMillis() - startTime;
             response.setStatus(429);
             response.setContentType("application/json");
-            response.setHeader("Retry-After",
-                    String.valueOf(rateLimiterService.getResetTimeSeconds(apiKeyHeader)));
+            response.setHeader("Retry-After", String.valueOf(decision.retryAfterSeconds()));
             response.getWriter().write("{\"error\":\"Rate limit exceeded. Upgrade your plan or wait.\"}");
             requestLogService.log(apiKeyHeader, request.getMethod(), path, 429, elapsed,
                     request.getRemoteAddr(), true);

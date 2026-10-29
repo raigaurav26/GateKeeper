@@ -1,5 +1,7 @@
 # GateKeeper — API Rate Limiter & Gateway
 
+[![CI](https://github.com/raigaurav26/GateKeeper/actions/workflows/ci.yml/badge.svg)](https://github.com/raigaurav26/GateKeeper/actions/workflows/ci.yml)
+
 A production-grade API rate limiting gateway built with **Spring Boot 3, Redis, JWT, and MySQL**. Manages API keys, enforces rate limits using the Token Bucket algorithm, logs every request, and provides usage analytics.
 
 ## Architecture
@@ -26,7 +28,7 @@ A production-grade API rate limiting gateway built with **Spring Boot 3, Redis, 
 | Component | Technology |
 |-----------|-----------|
 | Framework | Spring Boot 3.2 |
-| Rate Limiting | Redis (Token Bucket Algorithm) |
+| Rate Limiting | Redis + Lua (Token Bucket Algorithm) |
 | Database | MySQL 8 |
 | Authentication | Spring Security + JWT |
 | Language | Java 17 |
@@ -35,7 +37,7 @@ A production-grade API rate limiting gateway built with **Spring Boot 3, Redis, 
 ## Features
 
 - **API Key Management** — Generate, revoke, and manage keys with tier-based limits
-- **Token Bucket Rate Limiting** — Redis-backed counters with configurable limits per key
+- **Token Bucket Rate Limiting** — atomic Redis Lua script, smooth refill, configurable limits per key
 - **Rate Limit Headers** — `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
 - **Request Logging** — Every API call logged with method, path, status, response time, IP
 - **Usage Analytics** — Top endpoints, hourly volume, success rates, per-key stats
@@ -141,18 +143,27 @@ curl http://localhost:9090/api/analytics/summary \
 
 ## Token Bucket Algorithm
 
-The rate limiter uses a Redis-backed token bucket:
+Each API key gets a bucket in Redis that holds up to its tier limit in tokens and refills continuously over one hour (a FREE key gets one token back every 36 seconds, not 100 all at once on the hour).
 
-1. Each API key gets a counter in Redis with 1-hour TTL
-2. On each request, counter is checked against the tier limit
-3. If under limit → increment counter, allow request
-4. If at limit → reject with 429 and Retry-After header
-5. Counter auto-resets when TTL expires
+1. A request runs a Lua script on the key's bucket (`scripts/token_bucket.lua`)
+2. The script tops the bucket up for the time since the last request, capped at the limit
+3. If at least one token is left → take it and allow the request
+4. Otherwise → reject with 429 and a `Retry-After` of the seconds until the next token
+5. Idle buckets expire on their own after an hour, which is when they would be full again
+
+The read, refill and update happen inside one script, so Redis runs them atomically: concurrent requests on the same key can never spend more tokens than the bucket holds. The bucket level is kept in integer units (1/3,600,000 of a token per ms), so refill has no floating point drift.
 
 ```
-Request → Check Redis Counter → Under Limit? → Allow + Increment
-                                    │
-                                    └─ Over Limit? → 429 + Retry-After
+Request → EVAL token_bucket.lua → token available? → take 1, allow
+                                        │
+                                        └─ empty → 429 + Retry-After
+```
+
+## Running Tests
+
+```bash
+docker run -d -p 6379:6379 redis:7-alpine   # rate limiter tests run against real Redis
+mvn verify
 ```
 
 ## Author
