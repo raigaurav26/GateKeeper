@@ -3,19 +3,44 @@ package com.gatekeeper.config;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 
 @Component
 public class JwtUtil {
 
-    private String secret = "gateKeeperSecretKey12345678901234567890123456789012345";
-    private long expiration = 86400000;
+    private static final Logger log = LoggerFactory.getLogger(JwtUtil.class);
+
+    private final SecretKey key;
+    private final long expiration;
+
+    /**
+     * The signing secret comes from {@code JWT_SECRET} (at least 32 bytes). If it is not set, a random
+     * key is generated for this run: tokens stop working after a restart, but no secret lives in the code.
+     */
+    public JwtUtil(@Value("${gatekeeper.jwt.secret:}") String secret,
+                   @Value("${gatekeeper.jwt.expiration-ms:86400000}") long expiration) {
+        if (secret == null || secret.isBlank()) {
+            log.warn("JWT_SECRET is not set; using a random key, so tokens will not survive a restart");
+            this.key = Jwts.SIG.HS256.key().build();
+        } else {
+            byte[] bytes = secret.getBytes(StandardCharsets.UTF_8);
+            if (bytes.length < 32) {
+                throw new IllegalStateException("JWT_SECRET must be at least 32 bytes long");
+            }
+            this.key = Keys.hmacShaKeyFor(bytes);
+        }
+        this.expiration = expiration;
+    }
 
     private SecretKey getKey() {
-        return Keys.hmacShaKeyFor(secret.getBytes());
+        return key;
     }
 
     public String generateToken(String username, String role) {

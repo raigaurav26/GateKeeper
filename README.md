@@ -69,10 +69,15 @@ mysql -u root -proot -e "CREATE DATABASE gatekeeper;"
 # 2. Start Redis
 redis-server
 
-# 3. Run the application
+# 3. Set the JWT signing secret (at least 32 characters)
+export JWT_SECRET='replace-with-a-long-random-string-123'
+
+# 4. Run the application
 cd GateKeeper
 mvn spring-boot:run
 ```
+
+If `JWT_SECRET` is not set, a random key is generated at startup, so admin tokens stop working after a restart.
 
 App runs on `http://localhost:9090`
 
